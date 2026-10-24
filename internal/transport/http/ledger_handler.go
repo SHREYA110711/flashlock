@@ -3,6 +3,7 @@ package http
 import (
 	"errors"
 	"net/http"
+	"time"
 
 	"flashlock/internal/domain/ledger"
 	"flashlock/internal/repository/postgres"
@@ -23,14 +24,16 @@ func NewLedgerHandler(service *service.LedgerService) *LedgerHandler {
 func (h *LedgerHandler) RegisterRoutes(e *echo.Echo) {
 	v1 := e.Group("/api/v1")
 
-	// Accounts
+	// Accounts & Statements
 	v1.POST("/accounts", h.CreateAccount)
 	v1.GET("/accounts/:id", h.GetAccount)
+	v1.GET("/accounts/:id/statement", h.GetAccountStatement)
 
 	// Transactions & Transfers
 	v1.POST("/ledger/transactions", h.PostTransaction)
 	v1.GET("/ledger/transactions/:id", h.GetTransaction)
 	v1.POST("/ledger/transfers", h.Transfer)
+	v1.GET("/ledger/trial-balance", h.GetTrialBalance)
 }
 
 // CreateAccount handles POST /api/v1/accounts
@@ -139,3 +142,45 @@ func (h *LedgerHandler) Transfer(c echo.Context) error {
 
 	return c.JSON(http.StatusCreated, tx)
 }
+
+// GetAccountStatement handles GET /api/v1/accounts/:id/statement?start_date=...&end_date=...
+func (h *LedgerHandler) GetAccountStatement(c echo.Context) error {
+	idParam := c.Param("id")
+	id, err := uuid.Parse(idParam)
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid account UUID"})
+	}
+
+	var startDate, endDate time.Time
+	if startParam := c.QueryParam("start_date"); startParam != "" {
+		if t, err := time.Parse(time.RFC3339, startParam); err == nil {
+			startDate = t
+		}
+	}
+	if endParam := c.QueryParam("end_date"); endParam != "" {
+		if t, err := time.Parse(time.RFC3339, endParam); err == nil {
+			endDate = t
+		}
+	}
+
+	statement, err := h.service.GenerateStatement(c.Request().Context(), id, startDate, endDate)
+	if err != nil {
+		if errors.Is(err, postgres.ErrAccountNotFound) {
+			return c.JSON(http.StatusNotFound, map[string]string{"error": "account not found"})
+		}
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+	}
+
+	return c.JSON(http.StatusOK, statement)
+}
+
+// GetTrialBalance handles GET /api/v1/ledger/trial-balance
+func (h *LedgerHandler) GetTrialBalance(c echo.Context) error {
+	report, err := h.service.GenerateTrialBalance(c.Request().Context())
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+	}
+
+	return c.JSON(http.StatusOK, report)
+}
+

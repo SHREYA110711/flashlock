@@ -223,3 +223,43 @@ func (r *InventoryRepository) GetExpiredPendingHolds(ctx context.Context, limit 
 	return holds, nil
 }
 
+// GetHoldsBySKU retrieves holds associated with an inventory SKU.
+func (r *InventoryRepository) GetHoldsBySKU(ctx context.Context, sku string, limit, offset int) ([]reservation.Hold, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	if offset < 0 {
+		offset = 0
+	}
+
+	query := `
+		SELECT h.id, h.inventory_id, h.customer_id, h.idempotency_key, h.quantity, h.status, h.expires_at, h.created_at, h.updated_at
+		FROM reservation_holds h
+		JOIN inventory_items i ON h.inventory_id = i.id
+		WHERE i.sku = $1
+		ORDER BY h.created_at DESC
+		LIMIT $2 OFFSET $3
+	`
+	rows, err := r.pool.Query(ctx, query, sku, limit, offset)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query holds by sku: %w", err)
+	}
+	defer rows.Close()
+
+	var holds []reservation.Hold
+	for rows.Next() {
+		var h reservation.Hold
+		var status string
+		if err := rows.Scan(
+			&h.ID, &h.InventoryID, &h.CustomerID, &h.IdempotencyKey,
+			&h.Quantity, &status, &h.ExpiresAt, &h.CreatedAt, &h.UpdatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("failed to scan hold: %w", err)
+		}
+		h.Status = reservation.HoldStatus(status)
+		holds = append(holds, h)
+	}
+	return holds, nil
+}
+
+

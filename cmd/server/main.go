@@ -91,7 +91,7 @@ func main() {
 		}
 	}()
 
-	log.Println("🚀 FlashLock Phase 4 Engine ready (Reservation + Ledger + Saga Orchestrator).")
+	log.Println("🚀 FlashLock Phase 5 Engine ready (Reservation + Ledger + Saga + Auditing & Statements).")
 
 	// Wait for termination signal or exit cleanly in test run
 	select {

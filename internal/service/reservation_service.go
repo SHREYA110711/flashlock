@@ -246,3 +246,12 @@ func (s *ReservationService) ReleaseHold(ctx context.Context, holdID uuid.UUID) 
 	// 2. Mark as RELEASED in PostgreSQL
 	return s.pgRepo.UpdateHoldStatus(ctx, holdID, reservation.HoldStatusReleased)
 }
+
+// GetInventoryHolds lists historical and active holds for a specific SKU.
+func (s *ReservationService) GetInventoryHolds(ctx context.Context, sku string, limit, offset int) ([]reservation.Hold, error) {
+	if sku == "" {
+		return nil, errors.New("SKU is required")
+	}
+	return s.pgRepo.GetHoldsBySKU(ctx, sku, limit, offset)
+}
+

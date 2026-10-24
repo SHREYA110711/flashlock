@@ -3,6 +3,7 @@ package http
 import (
 	"errors"
 	"net/http"
+	"strconv"
 
 	"flashlock/internal/domain/reservation"
 	"flashlock/internal/repository/postgres"
@@ -27,6 +28,7 @@ func (h *ReservationHandler) RegisterRoutes(e *echo.Echo) {
 	// Inventory
 	v1.POST("/inventory", h.CreateInventory)
 	v1.GET("/inventory/:sku", h.GetInventory)
+	v1.GET("/inventory/:sku/holds", h.GetInventoryHolds)
 
 	// Holds
 	v1.POST("/reservations/hold", h.HoldInventory)
@@ -138,3 +140,26 @@ func (h *ReservationHandler) ReleaseHold(c echo.Context) error {
 		"message": "reservation hold released successfully and stock restored",
 	})
 }
+
+// GetInventoryHolds handles GET /api/v1/inventory/:sku/holds?limit=50&offset=0
+func (h *ReservationHandler) GetInventoryHolds(c echo.Context) error {
+	sku := c.Param("sku")
+	if sku == "" {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "SKU parameter is required"})
+	}
+
+	limit, _ := strconv.Atoi(c.QueryParam("limit"))
+	offset, _ := strconv.Atoi(c.QueryParam("offset"))
+
+	holds, err := h.service.GetInventoryHolds(c.Request().Context(), sku, limit, offset)
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+	}
+
+	return c.JSON(http.StatusOK, map[string]interface{}{
+		"sku":   sku,
+		"holds": holds,
+		"count": len(holds),
+	})
+}
+

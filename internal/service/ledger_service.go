@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"flashlock/internal/domain/ledger"
 	"flashlock/internal/repository/postgres"
@@ -171,3 +172,173 @@ func (s *LedgerService) Transfer(ctx context.Context, req TransferRequest) (*led
 func (s *LedgerService) GetTransaction(ctx context.Context, id uuid.UUID) (*ledger.Transaction, error) {
 	return s.repo.GetTransactionByID(ctx, id)
 }
+
+type StatementLineItem struct {
+	EntryID        uuid.UUID        `json:"entry_id"`
+	TransactionID  uuid.UUID        `json:"transaction_id"`
+	Description    string           `json:"description"`
+	Direction      ledger.Direction `json:"direction"`
+	Amount         decimal.Decimal  `json:"amount"`
+	RunningBalance decimal.Decimal  `json:"running_balance"`
+	CreatedAt      time.Time        `json:"created_at"`
+}
+
+type AccountStatement struct {
+	AccountID      uuid.UUID           `json:"account_id"`
+	AccountName    string              `json:"account_name"`
+	AccountType    ledger.AccountType  `json:"account_type"`
+	Currency       string              `json:"currency"`
+	CurrentBalance decimal.Decimal     `json:"current_balance"`
+	StartDate      time.Time           `json:"start_date"`
+	EndDate        time.Time           `json:"end_date"`
+	TotalDebits    decimal.Decimal     `json:"total_debits"`
+	TotalCredits   decimal.Decimal     `json:"total_credits"`
+	NetChange      decimal.Decimal     `json:"net_change"`
+	Entries        []StatementLineItem `json:"entries"`
+}
+
+// GenerateStatement produces an audit statement for an account over a date window.
+func (s *LedgerService) GenerateStatement(
+	ctx context.Context,
+	accountID uuid.UUID,
+	startDate, endDate time.Time,
+) (*AccountStatement, error) {
+	acc, err := s.repo.GetAccountByID(ctx, accountID)
+	if err != nil {
+		return nil, err
+	}
+
+	if startDate.IsZero() {
+		startDate = time.Now().UTC().AddDate(0, -1, 0) // Default last 30 days
+	}
+	if endDate.IsZero() {
+		endDate = time.Now().UTC()
+	}
+
+	rawEntries, err := s.repo.GetAccountEntriesForStatement(ctx, accountID, startDate, endDate)
+	if err != nil {
+		return nil, err
+	}
+
+	totalDebits := decimal.Zero
+	totalCredits := decimal.Zero
+	runningBalance := decimal.Zero
+
+	lineItems := make([]StatementLineItem, len(rawEntries))
+	for i, raw := range rawEntries {
+		switch raw.Direction {
+		case ledger.DirectionDebit:
+			totalDebits = totalDebits.Add(raw.Amount)
+			if acc.Type == ledger.AccountTypeAsset || acc.Type == ledger.AccountTypeExpense {
+				runningBalance = runningBalance.Add(raw.Amount)
+			} else {
+				runningBalance = runningBalance.Sub(raw.Amount)
+			}
+		case ledger.DirectionCredit:
+			totalCredits = totalCredits.Add(raw.Amount)
+			if acc.Type == ledger.AccountTypeAsset || acc.Type == ledger.AccountTypeExpense {
+				runningBalance = runningBalance.Sub(raw.Amount)
+			} else {
+				runningBalance = runningBalance.Add(raw.Amount)
+			}
+		}
+
+		lineItems[i] = StatementLineItem{
+			EntryID:        raw.EntryID,
+			TransactionID:  raw.TransactionID,
+			Description:    raw.Description,
+			Direction:      raw.Direction,
+			Amount:         raw.Amount,
+			RunningBalance: runningBalance,
+			CreatedAt:      raw.CreatedAt,
+		}
+	}
+
+	netChange := totalDebits.Sub(totalCredits)
+	if acc.Type != ledger.AccountTypeAsset && acc.Type != ledger.AccountTypeExpense {
+		netChange = totalCredits.Sub(totalDebits)
+	}
+
+	return &AccountStatement{
+		AccountID:      acc.ID,
+		AccountName:    acc.Name,
+		AccountType:    acc.Type,
+		Currency:       acc.Currency,
+		CurrentBalance: acc.Balance,
+		StartDate:      startDate,
+		EndDate:        endDate,
+		TotalDebits:    totalDebits,
+		TotalCredits:   totalCredits,
+		NetChange:      netChange,
+		Entries:        lineItems,
+	}, nil
+}
+
+type TrialBalanceRow struct {
+	AccountID     uuid.UUID          `json:"account_id"`
+	AccountName   string             `json:"account_name"`
+	AccountType   ledger.AccountType `json:"account_type"`
+	Currency      string             `json:"currency"`
+	DebitBalance  decimal.Decimal    `json:"debit_balance"`
+	CreditBalance decimal.Decimal    `json:"credit_balance"`
+}
+
+type TrialBalanceReport struct {
+	AsOfDate     time.Time         `json:"as_of_date"`
+	Accounts     []TrialBalanceRow `json:"accounts"`
+	TotalDebits  decimal.Decimal   `json:"total_debits"`
+	TotalCredits decimal.Decimal   `json:"total_credits"`
+	IsBalanced   bool              `json:"is_balanced"`
+	Discrepancy  decimal.Decimal   `json:"discrepancy"`
+}
+
+// GenerateTrialBalance aggregates all accounts and verifies the fundamental double-entry invariant:
+// sum(Debits) == sum(Credits) across all active accounts.
+func (s *LedgerService) GenerateTrialBalance(ctx context.Context) (*TrialBalanceReport, error) {
+	accounts, err := s.repo.GetAllAccounts(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	totalDebits := decimal.Zero
+	totalCredits := decimal.Zero
+	rows := make([]TrialBalanceRow, 0, len(accounts))
+
+	for _, acc := range accounts {
+		row := TrialBalanceRow{
+			AccountID:     acc.ID,
+			AccountName:   acc.Name,
+			AccountType:   acc.Type,
+			Currency:      acc.Currency,
+			DebitBalance:  decimal.Zero,
+			CreditBalance: decimal.Zero,
+		}
+
+		// Normal balance categorization:
+		// Assets & Expenses: normal balance = Debit
+		// Liabilities, Equity, Revenue: normal balance = Credit
+		switch acc.Type {
+		case ledger.AccountTypeAsset, ledger.AccountTypeExpense:
+			row.DebitBalance = acc.Balance
+			totalDebits = totalDebits.Add(acc.Balance)
+		case ledger.AccountTypeLiability, ledger.AccountTypeEquity, ledger.AccountTypeRevenue:
+			row.CreditBalance = acc.Balance
+			totalCredits = totalCredits.Add(acc.Balance)
+		}
+
+		rows = append(rows, row)
+	}
+
+	discrepancy := totalDebits.Sub(totalCredits)
+	isBalanced := discrepancy.IsZero()
+
+	return &TrialBalanceReport{
+		AsOfDate:     time.Now().UTC(),
+		Accounts:     rows,
+		TotalDebits:  totalDebits,
+		TotalCredits: totalCredits,
+		IsBalanced:   isBalanced,
+		Discrepancy:  discrepancy,
+	}, nil
+}
+

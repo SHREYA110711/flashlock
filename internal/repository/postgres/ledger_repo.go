@@ -370,3 +370,74 @@ func (r *LedgerRepository) lockAccountsForUpdate(ctx context.Context, tx pgx.Tx,
 
 	return accounts, nil
 }
+
+type StatementEntryRow struct {
+	EntryID        uuid.UUID
+	TransactionID  uuid.UUID
+	Description    string
+	Direction      ledger.Direction
+	Amount         decimal.Decimal
+	CreatedAt      time.Time
+}
+
+// GetAccountEntriesForStatement retrieves chronological entries for an account within a date window.
+func (r *LedgerRepository) GetAccountEntriesForStatement(
+	ctx context.Context,
+	accountID uuid.UUID,
+	startDate, endDate time.Time,
+) ([]StatementEntryRow, error) {
+	query := `
+		SELECT e.id, e.transaction_id, t.description, e.direction, e.amount, e.created_at
+		FROM entries e
+		JOIN transactions t ON e.transaction_id = t.id
+		WHERE e.account_id = $1 AND e.created_at >= $2 AND e.created_at <= $3
+		ORDER BY e.created_at ASC
+	`
+	rows, err := r.pool.Query(ctx, query, accountID, startDate, endDate)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query statement entries: %w", err)
+	}
+	defer rows.Close()
+
+	var entries []StatementEntryRow
+	for rows.Next() {
+		var row StatementEntryRow
+		var dir string
+		if err := rows.Scan(
+			&row.EntryID, &row.TransactionID, &row.Description,
+			&dir, &row.Amount, &row.CreatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("failed to scan statement row: %w", err)
+		}
+		row.Direction = ledger.Direction(dir)
+		entries = append(entries, row)
+	}
+	return entries, nil
+}
+
+// GetAllAccounts retrieves all accounts in the ledger for trial balance calculations.
+func (r *LedgerRepository) GetAllAccounts(ctx context.Context) ([]ledger.Account, error) {
+	query := `
+		SELECT id, name, type, currency, balance, version, created_at, updated_at
+		FROM accounts
+		ORDER BY type ASC, name ASC
+	`
+	rows, err := r.pool.Query(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query all accounts: %w", err)
+	}
+	defer rows.Close()
+
+	var accounts []ledger.Account
+	for rows.Next() {
+		var a ledger.Account
+		var accType string
+		if err := rows.Scan(&a.ID, &a.Name, &accType, &a.Currency, &a.Balance, &a.Version, &a.CreatedAt, &a.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("failed to scan account: %w", err)
+		}
+		a.Type = ledger.AccountType(accType)
+		accounts = append(accounts, a)
+	}
+	return accounts, nil
+}
+
