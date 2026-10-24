@@ -51,13 +51,25 @@ func main() {
 	// Initialize Echo HTTP server
 	echoServer := apphttp.NewServer()
 
-	// Wire Ledger Domain Components if Database is ready
+	// Wire Domain Components if Database is ready
 	if pgPool != nil {
+		// 1. Ledger Engine
 		ledgerRepo := postgres.NewLedgerRepository(pgPool)
 		ledgerService := service.NewLedgerService(ledgerRepo)
 		ledgerHandler := apphttp.NewLedgerHandler(ledgerService)
 		ledgerHandler.RegisterRoutes(echoServer)
 		log.Println("⚡ Ledger API routes registered (/api/v1/accounts, /api/v1/ledger/transactions, /api/v1/ledger/transfers)")
+
+		// 2. High-Concurrency Reservation Engine ("FlashLock")
+		invRepo := postgres.NewInventoryRepository(pgPool)
+		var redisResRepo *redis.ReservationRedisRepository
+		if rdb != nil {
+			redisResRepo = redis.NewReservationRedisRepository(rdb)
+		}
+		reservationService := service.NewReservationService(invRepo, redisResRepo, cfg.ReservationTTLSeconds)
+		reservationHandler := apphttp.NewReservationHandler(reservationService)
+		reservationHandler.RegisterRoutes(echoServer)
+		log.Println("⚡ Reservation API routes registered (/api/v1/inventory, /api/v1/reservations/hold, /api/v1/reservations/:id/confirm, /api/v1/reservations/:id/release)")
 	}
 
 	// Start Echo HTTP server in background goroutine
@@ -69,7 +81,7 @@ func main() {
 		}
 	}()
 
-	log.Println("🚀 FlashLock Phase 2 Engine ready.")
+	log.Println("🚀 FlashLock Phase 3 Engine ready.")
 
 	// Wait for termination signal or exit cleanly in test run
 	select {

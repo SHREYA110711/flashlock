@@ -90,7 +90,7 @@ curl http://localhost:8080/healthz
 
 - [x] **Phase 1:** Project Scaffolding, Infrastructure, Echo Web Server & Domain Models
 - [x] **Phase 2:** Core Double-Entry Ledger Engine (Atomic Multi-Legged Transactions & Idempotency)
-- [ ] **Phase 3:** High-Concurrency Reservation Engine (Atomic Redis Lua Holds & TTL Leases)
+- [x] **Phase 3:** High-Concurrency Reservation Engine (Atomic Redis Lua Holds & TTL Leases)
 - [ ] **Phase 4:** Two-Phase Saga Orchestrator (Hold -> Settle -> Post)
 - [ ] **Phase 5:** REST APIs & Ledger Statement Generation
 - [ ] **Phase 6:** High-Throughput Load Testing & Race Condition Verification (k6)
