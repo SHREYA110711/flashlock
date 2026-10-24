@@ -93,7 +93,7 @@ curl http://localhost:8080/healthz
 - [x] **Phase 3:** High-Concurrency Reservation Engine (Atomic Redis Lua Holds & TTL Leases)
 - [x] **Phase 4:** Two-Phase Saga Orchestrator (Hold -> Settle -> Post)
 - [x] **Phase 5:** REST APIs & Ledger Statement Generation
-- [ ] **Phase 6:** High-Throughput Load Testing & Race Condition Verification (k6)
+- [x] **Phase 6:** High-Throughput Load Testing & Race Condition Verification (k6 & Go Stress CLI)
 
 ---
 
@@ -129,4 +129,25 @@ curl http://localhost:8080/healthz
 | :--- | :--- | :--- |
 | `/api/v1/checkout` | `POST` | Atomic 2-phase settlement: Hold Confirm + Ledger Post |
 | `/api/v1/checkout/cancel` | `POST` | Cancel checkout and execute compensation |
+
+---
+
+## ⚡ High-Concurrency Stress & Load Testing
+
+### 1. Seed Demo Data & Flash-Sale Hot Spots
+```bash
+docker exec -i flashlock-postgres psql -U flashlock -d flashlock < scripts/seed.sql
+```
+
+### 2. Run Native Flash-Sale Stress Tester (500 Concurrent Buyers)
+Simulates 500 concurrent buyers firing at the exact same millisecond against a limited 10-ticket drop:
+```bash
+go run cmd/stress/main.go -concurrency=500 -sku=VIP-CONCERT-TICKET-2026
+```
+
+### 3. Run k6 Load Test
+```bash
+k6 run scripts/load_test.js
+```
+
 
