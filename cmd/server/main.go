@@ -13,6 +13,7 @@ import (
 	"flashlock/internal/config"
 	"flashlock/internal/repository/postgres"
 	"flashlock/internal/repository/redis"
+	"flashlock/internal/service"
 	apphttp "flashlock/internal/transport/http"
 )
 
@@ -50,6 +51,15 @@ func main() {
 	// Initialize Echo HTTP server
 	echoServer := apphttp.NewServer()
 
+	// Wire Ledger Domain Components if Database is ready
+	if pgPool != nil {
+		ledgerRepo := postgres.NewLedgerRepository(pgPool)
+		ledgerService := service.NewLedgerService(ledgerRepo)
+		ledgerHandler := apphttp.NewLedgerHandler(ledgerService)
+		ledgerHandler.RegisterRoutes(echoServer)
+		log.Println("⚡ Ledger API routes registered (/api/v1/accounts, /api/v1/ledger/transactions, /api/v1/ledger/transfers)")
+	}
+
 	// Start Echo HTTP server in background goroutine
 	go func() {
 		addr := fmt.Sprintf(":%d", cfg.AppPort)
@@ -59,7 +69,7 @@ func main() {
 		}
 	}()
 
-	log.Println("🚀 FlashLock initialization complete. Ready for Phase 2 implementation.")
+	log.Println("🚀 FlashLock Phase 2 Engine ready.")
 
 	// Wait for termination signal or exit cleanly in test run
 	select {

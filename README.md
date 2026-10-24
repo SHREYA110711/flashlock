@@ -89,7 +89,7 @@ curl http://localhost:8080/healthz
 ## 🗺️ Roadmap
 
 - [x] **Phase 1:** Project Scaffolding, Infrastructure, Echo Web Server & Domain Models
-- [ ] **Phase 2:** Core Double-Entry Ledger Engine (Atomic Multi-Legged Transactions & Idempotency)
+- [x] **Phase 2:** Core Double-Entry Ledger Engine (Atomic Multi-Legged Transactions & Idempotency)
 - [ ] **Phase 3:** High-Concurrency Reservation Engine (Atomic Redis Lua Holds & TTL Leases)
 - [ ] **Phase 4:** Two-Phase Saga Orchestrator (Hold -> Settle -> Post)
 - [ ] **Phase 5:** REST APIs & Ledger Statement Generation
