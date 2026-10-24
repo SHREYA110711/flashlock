@@ -80,6 +80,15 @@ func main() {
 		// 4. Background Lease Reaper Worker (Auto-reclaims abandoned holds)
 		leaseReaper := service.NewLeaseReaper(invRepo, reservationService, 5*time.Second, 100)
 		go leaseReaper.Start(ctx)
+
+		// 5. Transactional Outbox Worker & Webhook Event Streaming
+		outboxRepo := postgres.NewOutboxRepository(pgPool)
+		webhookHandler := apphttp.NewWebhookHandler(outboxRepo, ledgerRepo)
+		webhookHandler.RegisterRoutes(echoServer)
+		log.Println("⚡ Webhooks & Audit API routes registered (/api/v1/webhooks, /api/v1/ledger/audit/verify-chain)")
+
+		outboxWorker := service.NewOutboxWorker(outboxRepo, 1*time.Second, 50)
+		go outboxWorker.Start(ctx)
 	}
 
 	// Start Echo HTTP server in background goroutine
@@ -91,7 +100,7 @@ func main() {
 		}
 	}()
 
-	log.Println("🚀 FlashLock Phase 5 Engine ready (Reservation + Ledger + Saga + Auditing & Statements).")
+	log.Println("🚀 FlashLock Phase 7 Engine ready (Outbox + Hash Chaining + Reservation + Ledger + Saga).")
 
 	// Wait for termination signal or exit cleanly in test run
 	select {

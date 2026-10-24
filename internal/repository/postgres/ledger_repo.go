@@ -80,7 +80,7 @@ func (r *LedgerRepository) GetAccountByID(ctx context.Context, id uuid.UUID) (*l
 // GetTransactionByID retrieves a transaction and its entries by ID.
 func (r *LedgerRepository) GetTransactionByID(ctx context.Context, id uuid.UUID) (*ledger.Transaction, error) {
 	query := `
-		SELECT id, idempotency_key, description, status, metadata, created_at
+		SELECT id, idempotency_key, description, status, COALESCE(previous_hash, ''), COALESCE(current_hash, ''), metadata, created_at
 		FROM transactions
 		WHERE id = $1
 	`
@@ -88,7 +88,8 @@ func (r *LedgerRepository) GetTransactionByID(ctx context.Context, id uuid.UUID)
 	var status string
 
 	err := r.pool.QueryRow(ctx, query, id).Scan(
-		&tx.ID, &tx.IdempotencyKey, &tx.Description, &status, &tx.Metadata, &tx.CreatedAt,
+		&tx.ID, &tx.IdempotencyKey, &tx.Description, &status,
+		&tx.PreviousHash, &tx.CurrentHash, &tx.Metadata, &tx.CreatedAt,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -109,7 +110,7 @@ func (r *LedgerRepository) GetTransactionByID(ctx context.Context, id uuid.UUID)
 // GetTransactionByIdempotencyKey checks if a transaction has already been recorded.
 func (r *LedgerRepository) GetTransactionByIdempotencyKey(ctx context.Context, key string) (*ledger.Transaction, error) {
 	query := `
-		SELECT id, idempotency_key, description, status, metadata, created_at
+		SELECT id, idempotency_key, description, status, COALESCE(previous_hash, ''), COALESCE(current_hash, ''), metadata, created_at
 		FROM transactions
 		WHERE idempotency_key = $1
 	`
@@ -117,7 +118,8 @@ func (r *LedgerRepository) GetTransactionByIdempotencyKey(ctx context.Context, k
 	var status string
 
 	err := r.pool.QueryRow(ctx, query, key).Scan(
-		&tx.ID, &tx.IdempotencyKey, &tx.Description, &status, &tx.Metadata, &tx.CreatedAt,
+		&tx.ID, &tx.IdempotencyKey, &tx.Description, &status,
+		&tx.PreviousHash, &tx.CurrentHash, &tx.Metadata, &tx.CreatedAt,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -269,19 +271,39 @@ func (r *LedgerRepository) PostTransaction(ctx context.Context, tx *ledger.Trans
 		}
 	}
 
-	// Step 8: Insert Transaction record
+	// Step 8: Cryptographic Hash Chaining
+	// Fetch the hash of the latest committed transaction for Merkle chaining
+	var prevHash string
+	getLastHashQuery := `
+		SELECT COALESCE(current_hash, '0000000000000000000000000000000000000000000000000000000000000000')
+		FROM transactions
+		ORDER BY created_at DESC
+		LIMIT 1
+		FOR UPDATE
+	`
+	err = dbTx.QueryRow(ctx, getLastHashQuery).Scan(&prevHash)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		prevHash = ledger.GenesisHash
+	}
+	if prevHash == "" {
+		prevHash = ledger.GenesisHash
+	}
+
 	if tx.ID == uuid.Nil {
 		tx.ID = uuid.New()
 	}
 	tx.Status = ledger.TransactionStatusPosted
 	tx.CreatedAt = now
+	tx.PreviousHash = prevHash
+	tx.CurrentHash = ledger.ComputeTransactionHash(prevHash, tx)
 
 	insertTxQuery := `
-		INSERT INTO transactions (id, idempotency_key, description, status, metadata, created_at)
-		VALUES ($1, $2, $3, $4, $5, $6)
+		INSERT INTO transactions (id, idempotency_key, description, status, previous_hash, current_hash, metadata, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 	`
 	if _, err := dbTx.Exec(ctx, insertTxQuery,
-		tx.ID, tx.IdempotencyKey, tx.Description, string(tx.Status), tx.Metadata, tx.CreatedAt,
+		tx.ID, tx.IdempotencyKey, tx.Description, string(tx.Status),
+		tx.PreviousHash, tx.CurrentHash, tx.Metadata, tx.CreatedAt,
 	); err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" { // Unique violation on idempotency_key
@@ -310,7 +332,22 @@ func (r *LedgerRepository) PostTransaction(ctx context.Context, tx *ledger.Trans
 		}
 	}
 
-	// Step 10: Commit database transaction
+	// Step 10: Record Transactional Outbox Event inside the same atomic database transaction
+	outboxRepo := NewOutboxRepository(r.pool)
+	eventPayload := map[string]interface{}{
+		"transaction_id":  tx.ID.String(),
+		"idempotency_key": tx.IdempotencyKey,
+		"description":     tx.Description,
+		"current_hash":    tx.CurrentHash,
+		"previous_hash":   tx.PreviousHash,
+		"entry_count":     len(tx.Entries),
+		"created_at":      tx.CreatedAt.Format(time.RFC3339),
+	}
+	if _, err := outboxRepo.RecordEventTx(ctx, dbTx, "LEDGER_TRANSACTION", tx.ID, "ledger.transaction_posted", eventPayload); err != nil {
+		return nil, fmt.Errorf("failed to record outbox event: %w", err)
+	}
+
+	// Step 11: Commit database transaction
 	if err := dbTx.Commit(ctx); err != nil {
 		return nil, fmt.Errorf("failed to commit transaction: %w", err)
 	}
@@ -440,4 +477,84 @@ func (r *LedgerRepository) GetAllAccounts(ctx context.Context) ([]ledger.Account
 	}
 	return accounts, nil
 }
+
+type IntegrityCheckResult struct {
+	TotalTransactionsChecked int       `json:"total_transactions_checked"`
+	IsChainIntact            bool      `json:"is_chain_intact"`
+	BrokenTransactionID      uuid.UUID `json:"broken_transaction_id,omitempty"`
+	ErrorMessage             string    `json:"error_message,omitempty"`
+	CheckedAt                time.Time `json:"checked_at"`
+}
+
+// VerifyLedgerIntegrity verifies the cryptographic SHA-256 hash chain of the entire historical ledger.
+func (r *LedgerRepository) VerifyLedgerIntegrity(ctx context.Context) (*IntegrityCheckResult, error) {
+	query := `
+		SELECT id, idempotency_key, description, status, COALESCE(previous_hash, ''), COALESCE(current_hash, ''), metadata, created_at
+		FROM transactions
+		ORDER BY created_at ASC
+	`
+	rows, err := r.pool.Query(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query transactions for integrity check: %w", err)
+	}
+	defer rows.Close()
+
+	var transactions []ledger.Transaction
+	for rows.Next() {
+		var tx ledger.Transaction
+		var status string
+		if err := rows.Scan(
+			&tx.ID, &tx.IdempotencyKey, &tx.Description, &status,
+			&tx.PreviousHash, &tx.CurrentHash, &tx.Metadata, &tx.CreatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("failed to scan transaction: %w", err)
+		}
+		tx.Status = ledger.TransactionStatus(status)
+		transactions = append(transactions, tx)
+	}
+
+	result := &IntegrityCheckResult{
+		TotalTransactionsChecked: len(transactions),
+		IsChainIntact:            true,
+		CheckedAt:                time.Now().UTC(),
+	}
+
+	if len(transactions) == 0 {
+		return result, nil
+	}
+
+	expectedPrevHash := ledger.GenesisHash
+	for _, tx := range transactions {
+		// 1. Verify previous hash linkage
+		if tx.PreviousHash != expectedPrevHash {
+			result.IsChainIntact = false
+			result.BrokenTransactionID = tx.ID
+			result.ErrorMessage = fmt.Sprintf("chain linkage broken at tx %s: expected prev_hash %s, found %s",
+				tx.ID, expectedPrevHash, tx.PreviousHash)
+			return result, nil
+		}
+
+		// Fetch entries for this transaction
+		entries, err := r.GetEntriesByTransactionID(ctx, tx.ID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to fetch entries for tx %s: %w", tx.ID, err)
+		}
+		tx.Entries = entries
+
+		// 2. Verify current hash integrity
+		expectedCurrentHash := ledger.ComputeTransactionHash(expectedPrevHash, &tx)
+		if tx.CurrentHash != expectedCurrentHash {
+			result.IsChainIntact = false
+			result.BrokenTransactionID = tx.ID
+			result.ErrorMessage = fmt.Sprintf("cryptographic hash mismatch at tx %s: data altered! expected %s, found %s",
+				tx.ID, expectedCurrentHash, tx.CurrentHash)
+			return result, nil
+		}
+
+		expectedPrevHash = tx.CurrentHash
+	}
+
+	return result, nil
+}
+
 

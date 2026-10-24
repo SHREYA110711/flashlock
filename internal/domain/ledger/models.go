@@ -84,6 +84,8 @@ type Transaction struct {
 	IdempotencyKey string                 `json:"idempotency_key"`
 	Description    string                 `json:"description"`
 	Status         TransactionStatus      `json:"status"`
+	PreviousHash   string                 `json:"previous_hash,omitempty"`
+	CurrentHash    string                 `json:"current_hash,omitempty"`
 	Metadata       map[string]interface{} `json:"metadata,omitempty"`
 	Entries        []Entry                `json:"entries"`
 	CreatedAt      time.Time              `json:"created_at"`

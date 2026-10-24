@@ -94,6 +94,7 @@ curl http://localhost:8080/healthz
 - [x] **Phase 4:** Two-Phase Saga Orchestrator (Hold -> Settle -> Post)
 - [x] **Phase 5:** REST APIs & Ledger Statement Generation
 - [x] **Phase 6:** High-Throughput Load Testing & Race Condition Verification (k6 & Go Stress CLI)
+- [x] **Phase 7:** Transactional Outbox Pattern & Cryptographic Audit Hash Chaining
 
 ---
 
@@ -129,6 +130,14 @@ curl http://localhost:8080/healthz
 | :--- | :--- | :--- |
 | `/api/v1/checkout` | `POST` | Atomic 2-phase settlement: Hold Confirm + Ledger Post |
 | `/api/v1/checkout/cancel` | `POST` | Cancel checkout and execute compensation |
+
+### 5. Event Streaming & Cryptographic Audit
+| Endpoint | Method | Description |
+| :--- | :--- | :--- |
+| `/api/v1/webhooks` | `POST` | Register asynchronous webhook listener for outbox events |
+| `/api/v1/webhooks` | `GET` | List active webhook subscriptions |
+| `/api/v1/ledger/audit/verify-chain` | `GET` | Verify cryptographic SHA-256 hash chain of entire ledger |
+
 
 ---
 
