@@ -79,10 +79,24 @@ docker compose up -d
 go run cmd/server/main.go
 ```
 
-### 4. Health Check
-```bash
-curl http://localhost:8080/healthz
-```
+### 4. Health Check & Live Interactive Dashboard
+- **Health check:**
+  ```bash
+  curl http://localhost:8080/healthz
+  ```
+- **Live Web Dashboard:**
+  Open **`http://localhost:8080/dashboard`** (or `http://localhost:8080/`) in your browser to interactively test flash reservations, view live balance sheets, and audit the cryptographic hash chain!
+
+---
+
+## 🖥️ Interactive Web Dashboard
+
+FlashLock includes a built-in dark-mode dashboard served directly by Echo (`/dashboard`):
+- **Real-Time Stock Depletion:** Visual meters and progress bars for high-contention flash drops (`VIP-CONCERT-TICKET-2026`, `AIR-JORDAN-RETRO-LIMITED`).
+- **Simulate Flash Spikes:** In-browser button firing concurrent contention waves to prove zero-overselling.
+- **2-Phase Saga Leases:** Live queue of leased holds with instant one-click "Complete Checkout" or "Release / Cancel" actions.
+- **Double-Entry Ledger Cards:** Real-time balances and global equilibrium indicator ($\sum \text{Debits} - \sum \text{Credits} = 0$).
+- **Cryptographic Audit:** In-browser button to verify the complete SHA-256 Merkle hash chain across all ledger entries.
 
 ---
 

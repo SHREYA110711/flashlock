@@ -102,19 +102,25 @@ func main() {
 
 	log.Println("🚀 FlashLock Phase 7 Engine ready (Outbox + Hash Chaining + Reservation + Ledger + Saga).")
 
-	// Wait for termination signal or exit cleanly in test run
-	select {
-	case <-ctx.Done():
-		log.Println("🛑 Shutting down gracefully...")
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_ = echoServer.Shutdown(shutdownCtx)
-	case <-time.After(1 * time.Second):
-		// Clean startup exit in scaffolding check
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
-		defer cancel()
-		_ = echoServer.Shutdown(shutdownCtx)
+	// Wait for termination signal or optional test timeout
+	if timeoutStr := os.Getenv("FLASHLOCK_TEST_TIMEOUT"); timeoutStr != "" {
+		if d, err := time.ParseDuration(timeoutStr); err == nil {
+			select {
+			case <-ctx.Done():
+			case <-time.After(d):
+				log.Println("⏱️ Test timeout reached, shutting down...")
+			}
+		} else {
+			<-ctx.Done()
+		}
+	} else {
+		<-ctx.Done()
 	}
+
+	log.Println("🛑 Shutting down gracefully...")
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_ = echoServer.Shutdown(shutdownCtx)
 
 	fmt.Println("Done.")
 }
