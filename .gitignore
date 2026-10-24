@@ -1,0 +1,28 @@
+# Binaries
+bin/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+flashlock
+
+# Test artifacts
+*.test
+*.out
+coverage.txt
+
+# Environment files
+.env
+.env.local
+
+# IDE & OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*~
+
+# Local database volumes
+postgres-data/
+redis-data/
