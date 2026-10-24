@@ -191,3 +191,35 @@ func (r *InventoryRepository) UpdateStockOnConfirmation(ctx context.Context, inv
 	}
 	return nil
 }
+
+// GetExpiredPendingHolds finds holds that passed their TTL without being confirmed.
+func (r *InventoryRepository) GetExpiredPendingHolds(ctx context.Context, limit int) ([]reservation.Hold, error) {
+	query := `
+		SELECT id, inventory_id, customer_id, idempotency_key, quantity, status, expires_at, created_at, updated_at
+		FROM reservation_holds
+		WHERE status = 'PENDING' AND expires_at < $1
+		ORDER BY expires_at ASC
+		LIMIT $2
+	`
+	rows, err := r.pool.Query(ctx, query, time.Now().UTC(), limit)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query expired holds: %w", err)
+	}
+	defer rows.Close()
+
+	var holds []reservation.Hold
+	for rows.Next() {
+		var h reservation.Hold
+		var status string
+		if err := rows.Scan(
+			&h.ID, &h.InventoryID, &h.CustomerID, &h.IdempotencyKey,
+			&h.Quantity, &status, &h.ExpiresAt, &h.CreatedAt, &h.UpdatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("failed to scan expired hold: %w", err)
+		}
+		h.Status = reservation.HoldStatus(status)
+		holds = append(holds, h)
+	}
+	return holds, nil
+}
+

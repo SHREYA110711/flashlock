@@ -70,6 +70,16 @@ func main() {
 		reservationHandler := apphttp.NewReservationHandler(reservationService)
 		reservationHandler.RegisterRoutes(echoServer)
 		log.Println("⚡ Reservation API routes registered (/api/v1/inventory, /api/v1/reservations/hold, /api/v1/reservations/:id/confirm, /api/v1/reservations/:id/release)")
+
+		// 3. Two-Phase Saga Orchestrator (Hold -> Settle -> Post)
+		sagaOrchestrator := service.NewSagaOrchestrator(ledgerService, reservationService, invRepo, ledgerRepo)
+		checkoutHandler := apphttp.NewCheckoutHandler(sagaOrchestrator, reservationService)
+		checkoutHandler.RegisterRoutes(echoServer)
+		log.Println("⚡ Checkout Saga API routes registered (/api/v1/checkout, /api/v1/checkout/cancel)")
+
+		// 4. Background Lease Reaper Worker (Auto-reclaims abandoned holds)
+		leaseReaper := service.NewLeaseReaper(invRepo, reservationService, 5*time.Second, 100)
+		go leaseReaper.Start(ctx)
 	}
 
 	// Start Echo HTTP server in background goroutine
@@ -81,7 +91,7 @@ func main() {
 		}
 	}()
 
-	log.Println("🚀 FlashLock Phase 3 Engine ready.")
+	log.Println("🚀 FlashLock Phase 4 Engine ready (Reservation + Ledger + Saga Orchestrator).")
 
 	// Wait for termination signal or exit cleanly in test run
 	select {
